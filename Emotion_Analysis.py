@@ -1,10 +1,11 @@
+# coding=utf-8
 import spacy
 import csv
-import random
+import os
 import regex as re
 from Subject_Objekt_Entity_Allignment import getRI_ID
 from RI_specificTokenizingRules import rules
-from agentFondness import makeAgentFondness, getAgentFondness
+from agentFondness import makeAgentFondness, getAgentFondness, replaceFondness
 
 
 
@@ -40,11 +41,10 @@ def getTextFromNumber(number, file):
             if row[0] == number:
                 return row[4]
 
-
 def get_valence_Dic():
     ValenceDic = {}
     # Load the ValenceDic from the cvs file.
-    with open("new_valence.csv", "r") as rf:
+    with open("/home/xenavanaon/Studium/Masterarbeit/new_valence.csv", "r") as rf:
         read_obj = csv.reader(rf, delimiter="\t")
         for row in read_obj:
             ValenceDic[row[0]] = row[1]
@@ -108,8 +108,11 @@ def getObjektOrSubjektDic(token, s, number, ValenceDic):
     if token.pos_ != 'PROPN':
         for i in token.children:
             SubValence = 0
-            if i.text in ValenceDic.keys() and (s[i.i -1] == token or s[i.i +1] == token) and token.pos_ != 'PROPN':
-                SubValence = SubValence + float(ValenceDic[i.text])
+            try:
+                if i.text in ValenceDic.keys() and (s[i.i -1] == token or s[i.i +1] == token) and token.pos_ != 'PROPN':
+                    SubValence = SubValence + float(ValenceDic[i.text])
+            except IndexError:
+                pass
             Dic["valence"] = SubValence
     return Dic
 
@@ -216,24 +219,29 @@ def getTriples(number, text, file):
     global sents_id_txt
     sents_id_txt = {}
     if alternativeRegest:
-        PrimaryObject = text.split(' an ')[1]
-        PrimaryObject = nlp(PrimaryObject)
-        for t in PrimaryObject:
-            t = getObjektOrSubjektDic(t, sentences[0], number, ValenceDic)
-            if t['RI_ID']:
-                PrimaryObject = t
-                break
-        alternativeRegest = getTriplesProceedingFromSubject(nlp(alternativeRegest[0]), alternativeRegest[1], ValenceDic)
-        if len(alternativeRegest) != 0:
-            SubjectDic = alternativeRegest[0]["Subject"]
-            ActionDic = alternativeRegest[0]["Action"]
-            triple = {
-                "number": number,
-                "Subject": SubjectDic,
-                "Action": ActionDic,
-                "AgentObject": PrimaryObject,
-                }
-            return [triple]
+        try:
+            PrimaryObject = text.split(' an ')[1]
+            PrimaryObject = nlp(PrimaryObject)
+            for t in PrimaryObject:
+                t = getObjektOrSubjektDic(t, sentences[0], number, ValenceDic)
+                if t['RI_ID']:
+                    PrimaryObject = t
+                    break
+                else:
+                    PrimaryObject = t
+            alternativeRegest = getTriplesProceedingFromSubject(nlp(alternativeRegest[0]), alternativeRegest[1], ValenceDic)
+            if len(alternativeRegest) != 0:
+                SubjectDic = alternativeRegest[0]["Subject"]
+                ActionDic = alternativeRegest[0]["Action"]
+                triple = {
+                    "number": number,
+                    "Subject": SubjectDic,
+                    "Action": ActionDic,
+                    "AgentObject": PrimaryObject,
+                    }
+                return [triple]
+        except IndexError:
+            pass
     else:
         for s in sentences:
             sentence_ID += 1
@@ -252,9 +260,12 @@ def getTriples(number, text, file):
 def getTriplesProceedingFromSubject(s, number, ValenceDic):
     # Defines a List to save triples in
     triples = []
+    triple = {}
     # sets Variables for the quadtriple Dicionaries
     SubjectDic = None
     ActionDic = None
+    ObjectDic = None
+    AgentObjectDic = None
     # Goes through each toke in the sentence
     for token in s:
         # Goes trough all Verbs in the sentence
@@ -267,30 +278,56 @@ def getTriplesProceedingFromSubject(s, number, ValenceDic):
                 pass
             # Defines the Action trough the found verb
             ActionDic = get_Action_Dic(number, token)
+            #Workaround: parsing 'verleiht' spacy recognizes the Agent Object as a second Subject even in simple sentences
+            if token.text == 'verleiht':
+                try:
+                    lID = getRI_ID(number, s[token.i -1])
+                    if not lID == None:
+                        SubjectDic = getObjektOrSubjektDic(s[token.i -1], s, number, ValenceDic)
+                    else:
+                        SubjectDic = getObjektOrSubjektDic(s[token.i -2], s, number, ValenceDic)
+                    rID = getRI_ID(number, s[token.i -1])
+                    if not lID == None:
+                        AgentObjectDic = getObjektOrSubjektDic(s[token.i +1], s, number, ValenceDic)
+                    else:
+                        AgentObjectDic = getObjektOrSubjektDic(s[token.i +2], s, number, ValenceDic)
+                    for child in token.children:
+                        if child.dep == 'oa' or child.dep_ == 'da' or child.dep_ == 'oc' and child.pos_ == 'NOUN':
+                            ObjectDic = getObjektOrSubjektDic(child, s, number, ValenceDic)
+                except IndexError:
+                    pass
+                if SubjectDic and AgentObjectDic:
+                    triple['Subject'] = SubjectDic
+                    triple['Action'] = ActionDic
+                    triple['Object'] = ObjectDic
+                    triple['AgentObject'] = AgentObjectDic
+                    triple['variables'] = {'unexp': unexp}
+
             # Goes through all direct children of the verb and finds subjects
-            for child1 in token.children:
-                if child1.dep_ == 'sb':
-                    # Defines the SubjectDic through the found subject
-                    SubjectDic = getObjektOrSubjektDic(child1, s, number, ValenceDic)
-                    # goes through the direct children of the verb again and finds objects
-                    for child2 in token.children:
-                        if child2.dep_ == 'oa' or child2.dep_ == 'da':
-                            for i in getTriplesProceedingFromSubjectSUB(child2, number, SubjectDic, ActionDic, s, unexp):
-                                triples.append(i)
-                        if child2.pos_ == 'VERB':
-                            try:
-                                valence = ValenceDic[child2.text]
-                            except KeyError:
-                                valence = 0
-                            ActionDic['Text'] = ActionDic['Text'] + ' ' + child2.text
-                            try:
-                                ActionDic['valence'] = (float(ActionDic['valence']) + float(valence))
-                            except KeyError:
-                                pass
-                            for child3 in child2.children:
-                                if child3.dep_ == 'oa' or child3.dep_ == 'da':
-                                    for i in getTriplesProceedingFromSubjectSUB(child3, number, SubjectDic, ActionDic, s, unexp):
-                                        triples.append(i)
+            else:
+                for child1 in token.children:
+                    if child1.dep_ == 'sb':
+                        # Defines the SubjectDic through the found subject
+                        SubjectDic = getObjektOrSubjektDic(child1, s, number, ValenceDic)
+                        # goes through the direct children of the verb again and finds objects
+                        for child2 in token.children:
+                            if child2.dep_ == 'oa' or child2.dep_ == 'da':
+                                for i in getTriplesProceedingFromSubjectSUB(child2, number, SubjectDic, ActionDic, s, unexp):
+                                    triples.append(i)
+                            if child2.pos_ == 'VERB':
+                                try:
+                                    valence = ValenceDic[child2.text]
+                                except KeyError:
+                                    valence = 0
+                                ActionDic['Text'] = ActionDic['Text'] + ' ' + child2.text
+                                try:
+                                    ActionDic['valence'] = (float(ActionDic['valence']) + float(valence))
+                                except KeyError:
+                                    pass
+                                for child3 in child2.children:
+                                    if child3.dep_ == 'oa' or child3.dep_ == 'da':
+                                        for i in getTriplesProceedingFromSubjectSUB(child3, number, SubjectDic, ActionDic, s, unexp):
+                                            triples.append(i)
     return triples
 
 
@@ -320,8 +357,6 @@ def getTriplesProceedingFromSubjectSUB(child, number, SubjectDic, ActionDic, s, 
      # In case there is a conjunction in the subtree of the AgentObject an other triple with the same Subjet and Object is added.
      triple = {'number': number}
      AgentObjectDic = getObjektOrSubjektDic(child, s, number, ValenceDic)
-     print(child.text)
-     print(child.head.text)
      if child.head.text == 'gegen':
          AgentObjectDic['Text'] = 'XgegenX ' + AgentObjectDic['Text']
      triple['Subject'] = SubjectDic
@@ -415,6 +450,7 @@ def getTriplesProceedingFromObjectsGEGEN(s, number, ValenceDic):
             triple['Action'] = ActionDic
             triple['Object'] = None
             triple['AgentObject'] = getObjektOrSubjektDic(Object, s, number, ValenceDic)
+            triple['AgentObject']['Text'] = 'XgegenX ' + triple['AgentObject']['Text']
             triple['variables'] = {'unexp': unexp}
             if triple not in Otriples and triple['Subject']['RI_ID'] != triple['AgentObject']['RI_ID']:
                 Otriples.append(dict(triple))
@@ -465,6 +501,7 @@ def getVariablesFromSubject(triple):
     # [distress,sorry_for,resentment,gloating,hope,fear,satisfaction,fear_confirmed,relief,dissapointment,pride,shame,admiration,reproach,love,hate,joy,gratification,remorse,gratitude,anger,shock,surprise]
     sub = triple["Subject"]
     act = triple["Action"]
+    sp = "desirable"
     try:
         obj = triple["Object"]
     except KeyError:
@@ -480,47 +517,45 @@ def getVariablesFromSubject(triple):
         act_val = 0
     try:
         act_val = act_val + float(obj["valence"])
-    except (KeyError, TypeError):
+    except (UnboundLocalError, KeyError, TypeError):
         pass
     try:
         Aobj_val = float(Aobj["valence"])
     except KeyError:
         Aobj_val = 0
-    if obj and 'XgegenX' in Aobj['Text']:
-        if act_val < 0 and float(obj["valence"]) < 0:
-            act_val = abs(act_val)
-        elif act_val > 0 and float(obj["valence"]) < 0:
-            act_val = float(act["valence"]) + abs(float(obj["valence"]))
     for t in act.values():
         if t == "PRON" or t == "PRF" or t == "PPOSS" or t == "PPOSS":
             de = "self"
         else:
             de = "other"
-    if act_val > 0.5 and de == 'other':
+    if Aobj_val + act_val < 0:
+        sr = "displeased"
+    elif Aobj_val + act_val > 0:
+        sr = "pleased"
+    else:
+        sr = "neutral"
+    if act_val > 0.25 and de == 'other':
         sa = "praiseworthy"
-    elif act_val < -0.5 and de == 'other':
+    elif act_val < -0.25 and de == 'other':
         sa = "blameworthy"
     else:
         sa = "neutral"
+    if 'XgegenX' in Aobj['Text']:
+        try:
+            act_val = -abs(float(act["valence"]))
+            act_val = act_val + -abs(float(obj["valence"]))
+        except (KeyError, TypeError):
+            pass
+    op = act_val
     try:
-        op = float(triple['Object']['valence'])
-    except (KeyError, TypeError):
-        op = float(triple['Action']['valence'])
-    if op > 0:
-        op = 'desirable'
-    elif op < 0:
-        op = 'undesirable'
-    else:
+        if op > 0:
+            op = 'desirable'
+        elif op < 0:
+            op = 'undesirable'
+        else:
+            op = 'neutral'
+    except UnboundLocalError:
         op = 'neutral'
-    if Aobj_val + act_val < 0:
-        sr = "displeased"
-        sp = "undesirable"
-    elif Aobj_val + act_val > 0:
-        sr = "pleased"
-        sp = "desirable"
-    else:
-        sr = "neutral"
-        sp = "neutral"
     if Aobj_val > 0:
         of = "liked"
     elif Aobj_val < 0:
@@ -534,12 +569,15 @@ def getVariablesFromSubject(triple):
             stat = "confirmed"
     con_pos = []
     adv_List = []
-    if triple['Action']['pos'] == 'NOUN':
+    try:
+        if triple['Action']['pos'] == 'NOUN':
+            stat = 'confirmed'
+        elif triple['Action']['form']['Tense'] == 'Past':
+            stat = 'confirmed'
+        elif triple['Action']['form']['Tense'] == 'Pres':
+            stat = 'unconfirmed'
+    except KeyError:
         stat = 'confirmed'
-    elif triple['Action']['form']['Tense'] == 'Past':
-        stat = 'confirmed'
-    elif triple['Action']['form']['Tense'] == 'Pres':
-        stat = 'unconfirmed'
     for i in act["subtree"]:
         con_pos.append(i.pos_)
         if i.pos_ == "ADV":
@@ -565,29 +603,30 @@ def getVariablesFromSubject(triple):
     ):
         stat = "disconfirmed"
     try:
+        if triple['Action']['form']['Tense'] == 'Pres':
+            stat = 'confirmed'
+        for t in triple['Action']['subtree']:
+            if t.dep_ == 'pm':
+                stat = 'unconfirmed'
+                break
+    except KeyError:
+        stat = 'confirmed'
+    try:
         if triple['variables']['unexp']:
             unexp = True
         else:
             unexp = False
     except KeyError:
         unexp = False
-    if Aobj_val < 0.5 and Aobj_val > -0.5:
-        makeAgentFondness(triple)
-        af = 'neutral'
-        if act_val > 0:
+    af = getAgentFondness(sub['RI_ID'], Aobj['RI_ID'])
+    if not af:
+        makeAgentFondness(act_val, sub['RI_ID'], Aobj['RI_ID'])
+        if act_val > 0.3:
             af = 'liked'
         else:
             af = 'not liked'
     else:
-        if Aobj_val < -0.5:
-            af = 'not liked'
-        elif Aobj_val > 0.5:
-            af = 'liked'
-        else:
-            af = getAgentFondness(triple)
-            if af == None:
-                makeAgentFondness(triple)
-                af = makeAgentFondness(triple)
+        replaceFondness(act_val, sub['RI_ID'], Aobj['RI_ID'])
     variableDic = {
         "af": af,
         "sa": sa,
@@ -617,7 +656,7 @@ def getVariablesFromObject(triple, SubvariableDic):
         act_val = 0
     try:
         act_val = act_val + float(obj["valence"])
-    except (KeyError, TypeError):
+    except (UnboundLocalError, KeyError, TypeError):
         pass
     try:
         sub_val = float(sub["valence"])
@@ -628,17 +667,26 @@ def getVariablesFromObject(triple, SubvariableDic):
     else:
         de = 'self'
     try:
-        sr = float(triple['Action']['valence']) + float(triple['AgentObject']['valence'])
-        op = float(triple['Object']['valence'])
-    except (KeyError, TypeError):
-        sr = float(triple['Action']['valence'])
         op = float(triple['Action']['valence'])
-    if op > 0:
-        op = 'desirable'
-    elif op < 0:
-        op = 'undesirable'
-    else:
+        op = op + float(triple['Object']['valence'])
+    except (KeyError, TypeError):
+        pass
+    try:
+        if op > 0:
+            op = 'desirable'
+        elif op < 0:
+            op = 'undesirable'
+        else:
+            op = 'neutral'
+    except UnboundLocalError:
         op = 'neutral'
+    if 'XgegenX' in sub['Text']:
+        try:
+            act_val = -abs(float(act["valence"]))
+            act_val = act_val + -abs(float(obj["valence"]))
+        except (KeyError,TypeError):
+            pass
+    sr = act_val
     if sr > 0:
         sr = 'pleased'
         sp = 'desirable'
@@ -649,34 +697,20 @@ def getVariablesFromObject(triple, SubvariableDic):
         Aobj_val = float(Aobj["valence"])
     except KeyError:
         Aobj_val = False
-    if obj and 'XgegenX' in Aobj['Text']:
-        if act_val < 0 and float(obj["valence"]) < 0:
-            act_val = abs(act_val)
-        elif act_val > 0 and float(obj["valence"]) < 0:
-            act_val = -abs(float(act["valence"])) + (float(obj["valence"]))
     if not Aobj_val:
         Aobj_val = 0
-    if Aobj_val < 0.5 and Aobj_val > -0.5:
-        makeAgentFondness(triple)
-        if act_val > 0:
+    af = getAgentFondness(sub['RI_ID'], Aobj['RI_ID'])
+    if not af:
+        makeAgentFondness(act_val, sub['RI_ID'], Aobj['RI_ID'])
+        if act_val > 0.3:
             af = 'liked'
         else:
             af = 'not liked'
     else:
-        if Aobj_val < -0.5:
-            af = 'not liked'
-        elif Aobj_val > 0.5:
-            af = 'liked'
-        else:
-            af = getAgentFondness(triple)
-            if af == None and act_val < 0:
-                makeAgentFondness(triple)
-                af = 'neutral'
-    if sub['RI_ID'] == "F00001419":
-        sp = 'desirable'
-    if act_val > 0.5 and de == 'other':
+        replaceFondness(act_val, sub['RI_ID'], Aobj['RI_ID'])
+    if act_val > 0.25 and de == 'other':
         sa = "praiseworthy"
-    elif act_val < -0.5 and de == 'other':
+    elif act_val < -0.25 and de == 'other':
         sa = "blameworthy"
     else:
         sa = "neutral"
@@ -697,97 +731,98 @@ def ApplyEmotionModelRules(variableDic):
     emotion_List = []
     if variableDic["sr"] == "displeased" and variableDic["de"] == "self":
         emotion_List.append("distress")
-    elif variableDic["sr"] == "displeased" and variableDic["de"] == "other" and variableDic["af"] == "liked":
+    if variableDic["sr"] == "pleased":
+        emotion_List.append("joy")
+    if variableDic["sr"] == "displeased" and variableDic["de"] == "other" and variableDic["af"] == "liked":
         emotion_List.append("sorry_for")
-    elif (
+    if variableDic["sr"] == "pleased" and variableDic["de"] == "other" and variableDic["af"] == "liked":
+        emotion_List.append("happy_for")
+    if (
         variableDic["sr"] == "displeased"
         and variableDic["sp"] == "desirable"
-        and variableDic["af"] == "not liked"
+        and not variableDic["af"] == "not liked"
         and variableDic["de"] == "other"
     ):
         emotion_List.append("resentment")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["op"] == "undesirable"
         and variableDic["af"] == "not liked"
         and variableDic["de"] == "other"
     ):
         emotion_List.append("gloating")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["sp"] == "desirable"
         and variableDic["stat"] == "unconfirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("hope")
-    elif (
+    if (
         variableDic["sr"] == "displeased"
         and variableDic["sp"] == "undesirable"
         and variableDic["stat"] == "unconfirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("fear")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["sp"] == "desirable"
         and variableDic["stat"] == "confirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("satisfaction")
-    elif (
+    if (
         variableDic["sr"] == "displeased"
         and variableDic["sp"] == "undesirable"
         and variableDic["stat"] == "confirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("fear_confirmed")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["sp"] == "undesirable"
-        and variableDic["stat"] == "disfirmed"
+        and variableDic["stat"] == "disconfirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("relief")
-    elif (
+    if (
         variableDic["sr"] == "displeased"
         and variableDic["sp"] == "desirable"
         and variableDic["stat"] == "disconfirmed"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("dissapointment")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["sa"] == "praiseworthy"
         and variableDic["sp"] == "desirable"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("pride")
-    elif (
+    if (
         variableDic["sr"] == "displeased"
         and variableDic["sa"] == "blameworthy"
         and variableDic["sp"] == "undesirable"
         and variableDic["de"] == "self"
     ):
         emotion_List.append("shame")
-    elif (
+    if (
         variableDic["sr"] == "pleased"
         and variableDic["sa"] == "praiseworthy"
         and variableDic["op"] == "desirable"
         and variableDic["de"] == "other"
     ):
         emotion_List.append("admiration")
-    elif (
+    if (
         variableDic["sr"] == "displeased"
-        and variableDic["sa"] == "blameworthy"
         and variableDic["op"] == "undesirable"
         and variableDic["de"] == "other"
     ):
         emotion_List.append("reproach")
-    elif variableDic["sr"] == "pleased":
-        emotion_List.append("joy")
     if "joy" in emotion_List and variableDic["unexp"]:
         emotion_List.append("suprise")
-    elif "distress" in emotion_List and variableDic["unexp"]:
+    if "distress" in emotion_List and variableDic["unexp"]:
         emotion_List.append("shock")
     return emotion_List
 
@@ -798,19 +833,19 @@ def ApplyComplexEmotionModelRules(Subject_emotion_List, Object_emotion_List):
     Object_complex_List = []
     if "joy" in Subject_emotion_List and "pride" in Subject_emotion_List:
         Subject_complex_List.append("gratification")
-    elif "joy" in Subject_emotion_List and "pride" in Subject_emotion_List:
+    if "joy" in Object_emotion_List and "pride" in Object_emotion_List:
         Object_complex_List.append("gratification")
-    elif "distress" in Subject_emotion_List and "shame" in Subject_emotion_List:
+    if "distress" in Subject_emotion_List and "shame" in Subject_emotion_List:
         Subject_emotion_List.append("remorse")
-    elif "distress" in Object_emotion_List and "shame" in Object_emotion_List:
+    if "distress" in Object_emotion_List and "shame" in Object_emotion_List:
         Object_emotion_List.append("remorse")
-    elif "joy" in Subject_emotion_List and "admiration" in Object_emotion_List:
+    if "joy" in Subject_emotion_List and "admiration" in Object_emotion_List:
         Subject_emotion_List.append("gratitude")
-    elif "joy" in Object_emotion_List and "admiration" in Subject_emotion_List:
+    if "joy" in Object_emotion_List and "admiration" in Subject_emotion_List:
         Object_emotion_List.append("gratitude")
-    elif "distress" in Subject_emotion_List and "reproach" in Object_emotion_List:
+    if "distress" in Subject_emotion_List and "reproach" in Object_emotion_List:
         Subject_emotion_List.append("anger")
-    elif "distress" in Object_emotion_List and "reproach" in Subject_emotion_List:
+    if "distress" in Object_emotion_List and "reproach" in Subject_emotion_List:
         Object_emotion_List.append("anger")
     return [Subject_emotion_List, Object_emotion_List]
 
@@ -846,17 +881,3 @@ conf_adv = [
     "schon",
     "vormals",
 ]
-
-for i in getTriples(
-  "[RI XIII] H. 7 n. 512",
-  "Kaiser Friedrich teilt Bischof Heinrich von Münster, den Herzöge Johann von Kleve und Wilhelm von Jülich-Berg sowie Bürgermeistern und Rat der Stadt Köln und allen Reichsuntertanen mit, daß ausweislich vorgelegter Urkunden der Kölner Bürger Tilmann Schreinmacher von Attendorn vor Doktor Benedikt von Werlis als Kommissar des Kölner Offizials ein Urteil gegen den Münsteraner Bürger Bernhard Pape erwirkt habe und über diesen der geistliche Bann verhängt worden sei. Obwohl diese Sentenzen später von Dorktor Engelbert von Daun, Dechant zu Sankt Georg in Köln, als dem Subdelegierten des päpstlichen Kommissars Dr. Dietmar Berswort, Dechant an Sankt Kunibert in Köln, bestätigt worden seien, habe Pape sie mißachtet und sei das dem Kläger gehörige Geld schuldig geblieben. Da schließlich auch Bürgermeister und Rat der Stadt Münster Kaiser Friedrich's Befehl mißachteten, ihren Mitbürger zur Befolgung des Urteils und zur Rückzahlung seiner Schulden anzuhalten, gebietet er ihnen bei Strafe seiner Ungnade und einer je zur Hälfte an die kaiserlich Kammer und die Geschädigten fallenden Strafe von 30 Mark Gold, die Bürger, Einwohner und zugewanndten der Stadt Münster und ihre Güter allenthalben solange zu arrestieren, bis sie seinem Befehl gehorchen und der Kläger befriedigt ist.",
-  "processedRI_13Hefte.csv",
-):
-    print(i)
-    SVariables = getVariablesFromSubject(i)
-    print('from Subject: ' + str(SVariables))
-    SubjectPrimaryEmotions = ApplyEmotionModelRules(SVariables)
-    OVariables = getVariablesFromObject(i, SVariables)
-    print(' from Object: ' + str(OVariables))
-    ObjectPrimaryEmotions = ApplyEmotionModelRules(OVariables)
-    print(ApplyComplexEmotionModelRules(SubjectPrimaryEmotions, ObjectPrimaryEmotions))
