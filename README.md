@@ -1,5 +1,9 @@
 # Relation Extraction OCC RI
-
+This repository is a work-in-progress and will be updated again in Janurary 2032. The following updates are in planning:
+  1. Update for the URI-Grabber, expanding it for additional departments.
+  2. Adjustment to the getEntDicFromXML.py, with additional options
+  3. Fix for the known issue, that not all emotion types will apper in the turtle-serialization.
+  
 
 ## URIGrabber.py 
 A helpful little snippet of code that takes the number of a Regest in either of the two forms #X-XXX or [XX] (Suppl) H. X n. X and returns the corresponding URI.
