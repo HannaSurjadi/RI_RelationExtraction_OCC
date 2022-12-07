@@ -4,6 +4,8 @@ This repository is a work-in-progress and will be updated again in Janurary 2032
   2. Adjustment to the getEntDicFromXML.py, with additional options
   3. Fix for the known issue, that not all emotion types will apper in the turtle-serialization.
   
+## ApplyModel.py
+Applies the model to a csv-Input File. Please note that the Preprocessing is seperated.
 
 ## URIGrabber.py 
 A helpful little snippet of code that takes the number of a Regest in either of the two forms #X-XXX or [XX] (Suppl) H. X n. X and returns the corresponding URI.
