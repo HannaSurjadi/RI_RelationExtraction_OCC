@@ -117,59 +117,6 @@ def getObjektOrSubjektDic(token, s, number, ValenceDic):
     return Dic
 
 
-def EventAllignment(triples, sentences):
-    Entities = []
-    for tuple in triples:
-        number = tuple["number"]
-        if tuple["Object"]["RI_ID"]:
-            Entities.append(tuple["Object"]["Text"])
-        elif tuple["Subject"]["RI_ID"]:
-            Entities.append(tuple["Subject"]["Text"])
-        if not (
-            (tuple["Object"]["RI_ID"] or tuple["Subject"]["RI_ID"])
-            and "valence" not in tuple["Object"].keys()
-        ):
-            for s in sentences:
-                entTokens = None
-                for token in s:
-                    if (
-                        token.text == tuple["Object"]["Text"]
-                        and not tuple["Object"]["RI_ID"]
-                    ) or (
-                        token.text == tuple["Subject"]["Text"]
-                        and not tuple["Subject"]["RI_ID"]
-                    ):
-                        for subToken in token.subtree:
-                            if subToken.pos_ == ("ADP"):
-                                entTokens = []
-                                ActionDic = get_Action_Dic(number, token)
-                                for subToken in token.subtree:
-                                    if subToken.text in Entities:
-                                        entTokens.append(subToken)
-                        if entTokens:
-                            for ent1 in entTokens:
-                                SubjectDic = getObjektOrSubjektDic(
-                                    ent1, s, number, ValenceDic
-                                )
-                                for ent2 in entTokens:
-                                    if ent1.text != ent2.text:
-                                        ObjectDic = getObjektOrSubjektDic(
-                                            ent2, s, number, ValenceDic
-                                        )
-                                        newTriple = {
-                                            "number": number,
-                                            "Subject": SubjectDic,
-                                            "Action": ActionDic,
-                                            "Object": ObjectDic,
-                                        }
-                                        if (
-                                            newTriple not in triples
-                                            and newTriple["Subject"]["RI_ID"]
-                                            and newTriple["Object"]["RI_ID"]
-                                        ):
-                                            triples.append(newTriple)
-    return triples
-
 
 def getTriples(number, text, file):
     global unexp_list
